@@ -39,7 +39,7 @@ with st.sidebar:
         st.error("No se detectaron datos.")
 
 # --- CUERPO PRINCIPAL ---
-st.markdown("<h2 style='text-align: center;'>🗺️ Mapa Geográfico EMECU</h2>", unsafe_allow_html=True)
+st.markdown("<h2 style='text-align: center;'>🗺️ Mapa Geográfico EMECU Táchira</h2>", unsafe_allow_html=True)
 
 if df is not None:
     # Aplicar filtros
