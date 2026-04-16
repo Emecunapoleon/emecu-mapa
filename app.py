@@ -2,18 +2,20 @@ import streamlit as st
 import pandas as pd
 import folium
 from streamlit_folium import st_folium
+from folium.plugins import MarkerCluster
 
-# 1. Configuración y Estética
-st.set_page_config(page_title="Mapa de Integrantes EMECU", layout="wide")
+# 1. Configuración de la página
+st.set_page_config(page_title="Mapa Geográfico EMECU", layout="wide")
 
+# Estética de cabecera
 col_logo_1, col_logo_2, col_logo_3 = st.columns([1, 1, 1])
 with col_logo_2:
     st.image("https://i.postimg.cc/NfBWMzGC/Gran14-Napoleon-blanco.png", use_container_width=True)
 
-st.markdown("<h1 style='text-align: center;'>🗺️ Mapa Geográfico EMECU Táchira</h1>", unsafe_allow_html=True)
+st.markdown("<h1 style='text-align: center;'>🗺️ Sistema de Gestión Territorial EMECU</h1>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center;'>Visualización de Integrantes y Análisis de Datos - Táchira 2026</p>", unsafe_allow_html=True)
 
-# 2. Coordenadas de Referencia (Táchira)
-# Esto asigna un punto en el mapa según la ciudad registrada
+# 2. Coordenadas de Referencia
 COORDENADAS_MUNICIPIOS = {
     "San Cristóbal": [7.7667, -72.2250],
     "Rubio": [7.7000, -72.3500],
@@ -22,63 +24,93 @@ COORDENADAS_MUNICIPIOS = {
     "Junín": [7.6800, -72.3600]
 }
 
-# 3. Carga de Datos desde Google Sheets (CSV público)
-# Usamos el ID de tu hoja que ya conocemos
+# 3. Carga de Datos (ID de tu hoja)
 SHEET_ID = "1r-U_9tbE4Q1OK0QllaM14yseq1T-eppb9cfrXo0lq3c"
 URL_CSV = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv"
 
-@st.cache_data(ttl=600) # Se actualiza cada 10 minutos
+@st.cache_data(ttl=300)
 def cargar_datos():
     try:
         df = pd.read_csv(URL_CSV)
+        # Limpieza básica de nombres de columnas por si acaso
+        df.columns = [c.strip() for c in df.columns]
         return df
     except Exception as e:
         st.error(f"Error al conectar con la base de datos: {e}")
         return None
 
-df_integrantes = cargar_datos()
+df_raw = cargar_datos()
 
-if df_integrantes is not None:
-    # 4. Filtros en la barra lateral
-    st.sidebar.header("Filtros de Visualización")
-    filtro_catedra = st.sidebar.multiselect(
-        "Filtrar por Cátedra:",
-        options=df_integrantes["Cátedra"].unique(),
-        default=df_integrantes["Cátedra"].unique()
-    )
+if df_raw is not None:
+    # --- BARRA LATERAL (Buscador y Filtros) ---
+    st.sidebar.header("🔍 Buscador y Filtros")
+    
+    # Buscador por nombre o cédula
+    busqueda = st.sidebar.text_input("Buscar por Nombre o Cédula:")
+    
+    # Filtro de Cátedra
+    opciones_catedra = sorted(df_raw["Cátedra"].unique().tolist())
+    filtro_catedra = st.sidebar.multiselect("Filtrar por Cátedra:", opciones_catedra, default=opciones_catedra)
 
-    df_filtrado = df_integrantes[df_integrantes["Cátedra"].isin(filtro_catedra)]
+    # Aplicar Filtros
+    df_filtrado = df_raw[df_raw["Cátedra"].isin(filtro_catedra)]
+    if busqueda:
+        df_filtrado = df_filtrado[
+            df_filtrado["Primer_Nombre"].str.contains(busqueda, case=False, na=False) | 
+            df_filtrado["Cedula_Identidad"].astype(str).str.contains(busqueda, na=False)
+        ]
 
-    # 5. Creación del Mapa
-    # Centrado en el Táchira
-    m = folium.Map(location=[7.7667, -72.2250], zoom_start=10, tiles="CartoDB positron")
+    # --- SECCIÓN DE ESTADÍSTICAS (KPIs) ---
+    st.markdown("---")
+    kpi1, kpi2, kpi3 = st.columns(3)
+    with kpi1:
+        st.metric("Total Integrantes", len(df_filtrado))
+    with kpi2:
+        num_catedras = len(df_filtrado["Cátedra"].unique())
+        st.metric("Cátedras Activas", num_catedras)
+    with kpi3:
+        municipio_top = df_filtrado["Municipio"].mode()[0] if not df_filtrado.empty else "N/A"
+        st.metric("Municipio Mayoritario", municipio_top)
 
-    # Agregar marcadores
-    for index, fila in df_filtrado.iterrows():
+    # --- MAPA CON CLUSTERING ---
+    st.markdown("### Ubicación Geográfica")
+    
+    # Centro del mapa basado en el primer resultado o Táchira general
+    centro = [7.7667, -72.2250]
+    m = folium.Map(location=centro, zoom_start=11, tiles="CartoDB positron")
+    
+    # Crear el cluster (Agrupamiento)
+    marker_cluster = MarkerCluster().add_to(m)
+
+    for _, fila in df_filtrado.iterrows():
         ciudad = fila["Ciudad"]
         if ciudad in COORDENADAS_MUNICIPIOS:
-            punto = COORDENADAS_MUNICIPIOS[ciudad]
+            coord = COORDENADAS_MUNICIPIOS[ciudad]
             
-            # Contenido del globo al hacer clic
-            popup_text = f"""
-            <b>Integrante:</b> {fila['Primer_Nombre']} {fila['Primer_Apellido']}<br>
-            <b>Cátedra:</b> {fila['Cátedra']}<br>
-            <b>Municipio:</b> {fila['Municipio']}
+            # Popup con diseño
+            info = f"""
+            <div style='font-family: Arial; font-size: 12px;'>
+                <b>{fila['Primer_Nombre']} {fila['Primer_Apellido']}</b><br>
+                <hr style='margin: 5px 0;'>
+                <b>Cátedra:</b> {fila['Cátedra']}<br>
+                <b>Municipio:</b> {fila['Municipio']}<br>
+                <b>Celular:</b> {fila['Celular']}
+            </div>
             """
             
             folium.Marker(
-                location=punto,
-                popup=folium.Popup(popup_text, max_width=300),
-                tooltip=f"{fila['Primer_Nombre']} - {fila['Cátedra']}",
-                icon=folium.Icon(color="blue", icon="info-sign")
-            ).add_to(m)
+                location=coord,
+                popup=folium.Popup(info, max_width=250),
+                tooltip=f"{fila['Primer_Nombre']} ({fila['Cátedra']})",
+                icon=folium.Icon(color="blue", icon="user", prefix="fa")
+            ).add_to(marker_cluster)
 
-    # Mostrar el mapa en Streamlit
-    st_folium(m, width=1200, height=600)
+    # Mostrar Mapa
+    st_folium(m, width="100%", height=500)
 
-    # 6. Tabla de datos debajo del mapa
-    st.markdown("### Listado de Integrantes Seleccionados")
-    st.dataframe(df_filtrado[["Primer_Nombre", "Primer_Apellido", "Cátedra", "Ciudad", "Municipio"]], use_container_width=True)
+    # --- TABLA DE DETALLES ---
+    with st.expander("Ver tabla detallada de integrantes"):
+        st.write(df_filtrado)
 
 else:
-    st.warning("Aún no hay datos registrados para mostrar en el mapa.")
+    st.info("Esperando datos de la encuesta...")
