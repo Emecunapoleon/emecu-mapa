@@ -1,10 +1,8 @@
 import streamlit as st
 import pandas as pd
-import folium
-from streamlit_folium import st_folium
-from folium.plugins import MarkerCluster
+import pydeck as pdk
 
-st.set_page_config(page_title="Mapa EMECU Táchira", layout="wide")
+st.set_page_config(page_title="Mapa 3D EMECU Táchira", layout="wide")
 
 # URL de datos
 SHEET_ID = "1r-U_9tbE4Q1OK0QllaM14yseq1T-eppb9cfrXo0lq3c"
@@ -21,49 +19,70 @@ def cargar_datos():
 
 df = cargar_datos()
 
-# --- BARRA LATERAL: ESTADÍSTICAS Y FILTROS ---
-with st.sidebar:
-    st.image("https://i.postimg.cc/NfBWMzGC/Gran14-Napoleon-blanco.png", width=100)
-    st.title("Estadísticas Globales")
-    
-    if df is not None:
-        st.metric("Total Integrantes", len(df))
-        st.metric("Cátedras", len(df["Cátedra"].unique()))
-        
-        st.markdown("---")
-        st.subheader("Filtrar Mapa")
-        busqueda = st.text_input("Buscar por nombre/cédula:")
-        catedras = sorted(df["Cátedra"].unique().tolist())
-        sel_catedras = st.multiselect("Cátedras:", catedras, default=catedras)
-    else:
-        st.error("No se detectaron datos.")
-
-# --- CUERPO PRINCIPAL ---
-st.markdown("<h2 style='text-align: center;'>🗺️ Mapa Geográfico EMECU Táchira</h2>", unsafe_allow_html=True)
+# --- COORDENADAS PRECISAS PARA EL TÁCHIRA ---
+# Para que las barras se vean separadas, lo ideal es que cada registro tenga 
+# latitud y longitud propia. Si solo tienes "Ciudad", las barras se encimarán.
+coords_municipios = {
+    "San Cristóbal": {"lat": 7.7667, "lon": -72.2250},
+    "Rubio": {"lat": 7.7000, "lon": -72.3500},
+    "Táriba": {"lat": 7.8200, "lon": -72.2200},
+    "Cárdenas": {"lat": 7.8000, "lon": -72.2000},
+    "Junín": {"lat": 7.6800, "lon": -72.3600}
+}
 
 if df is not None:
-    # Aplicar filtros
-    df_f = df[df["Cátedra"].isin(sel_catedras)]
-    if busqueda:
-        df_f = df_f[df_f["Primer_Nombre"].str.contains(busqueda, case=False, na=False) | 
-                    df_f["Cedula_Identidad"].astype(str).str.contains(busqueda, na=False)]
+    # 1. Asignar coordenadas al DataFrame
+    df['lat'] = df['Ciudad'].map(lambda x: coords_municipios.get(x, {}).get('lat'))
+    df['lon'] = df['Ciudad'].map(lambda x: coords_municipios.get(x, {}).get('lon'))
+    
+    # Limpiar datos sin coordenadas
+    df = df.dropna(subset=['lat', 'lon'])
 
-    # Mapa
-    COORD_Tachira = [7.7667, -72.2250]
-    m = folium.Map(location=COORD_Tachira, zoom_start=11, tiles="CartoDB positron")
-    cluster = MarkerCluster().add_to(m)
+    # 2. Agrupar por ciudad para calcular la altura de las barras
+    # Contamos cuántos estudiantes hay por cada punto geográfico
+    df_counts = df.groupby(['lat', 'lon', 'Ciudad']).size().reset_index(name='cantidad')
 
-    # Diccionario de coordenadas básico
-    coords = {"San Cristóbal": [7.7667, -72.2250], "Rubio": [7.7000, -72.3500], 
-              "Táriba": [7.8200, -72.2200], "Cárdenas": [7.8000, -72.2000], "Junín": [7.6800, -72.3600]}
+    # --- DISEÑO DE LA PÁGINA ---
+    st.title("📊 Análisis de Densidad Territorial EMECU (3D)")
+    
+    col1, col2 = st.columns([1, 4])
+    
+    with col1:
+        st.subheader("Estadísticas")
+        st.metric("Total Integrantes", len(df))
+        st.write("La altura de las barras representa la concentración de hermanos en la zona.")
 
-    for _, fila in df_f.iterrows():
-        ciudad = fila["Ciudad"]
-        if ciudad in coords:
-            folium.Marker(
-                location=coords[ciudad],
-                popup=f"<b>{fila['Primer_Nombre']}</b><br>{fila['Cátedra']}",
-                icon=folium.Icon(color="blue", icon="user", prefix="fa")
-            ).add_to(cluster)
+    with col2:
+        # 3. CONFIGURACIÓN DE PYDECK (EL MAPA 3D)
+        view_state = pdk.ViewState(
+            latitude=7.7667,
+            longitude=-72.2250,
+            zoom=10,
+            pitch=45, # Ángulo de inclinación para el efecto 3D
+            bearing=0
+        )
 
-    st_folium(m, width="100%", height=600)
+        layer = pdk.Layer(
+            "ColumnLayer",
+            data=df_counts,
+            get_position='[lon, lat]',
+            get_elevation='cantidad', # Altura basada en la cantidad de personas
+            elevation_scale=100,      # Multiplicador de altura (ajusta según necesites)
+            radius=200,               # Ancho de la barrita
+            get_fill_color=[49, 130, 206, 200], # Color azul EMECU (RGBA)
+            pickable=True,
+            auto_highlight=True,
+        )
+
+        st.pydeck_chart(pdk.Deck(
+            map_style="mapbox://styles/mapbox/dark-v10", # Fondo oscuro tecnológico
+            initial_view_state=view_state,
+            layers=[layer],
+            tooltip={
+                "html": "<b>Ciudad:</b> {Ciudad}<br><b>Integrantes:</b> {cantidad}",
+                "style": {"color": "white"}
+            }
+        ))
+
+else:
+    st.error("No se pudieron cargar los datos para el renderizado 3D.")
