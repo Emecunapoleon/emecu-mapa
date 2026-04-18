@@ -1,11 +1,11 @@
 import streamlit as st
 import pandas as pd
-import pydeck as pdk
+import plotly.graph_objects as go
 
 # 1. Configuración de la interfaz
-st.set_page_config(page_title="Mapa Territorial EMECU (3D)", layout="wide")
+st.set_page_config(page_title="Mapa 3D EMECU - Táchira", layout="wide")
 
-# URL de datos (Tu Google Sheet)
+# URL de datos
 SHEET_ID = "1r-U_9tbE4Q1OK0QllaM14yseq1T-eppb9cfrXo0lq3c"
 URL_CSV = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv"
 
@@ -20,7 +20,7 @@ def cargar_datos():
 
 df = cargar_datos()
 
-# --- COORDENADAS ---
+# Coordenadas base
 coords_municipios = {
     "San Cristóbal": {"lat": 7.7667, "lon": -72.2250},
     "Rubio": {"lat": 7.7000, "lon": -72.3500},
@@ -29,59 +29,53 @@ coords_municipios = {
     "Junín": {"lat": 7.6800, "lon": -72.3600}
 }
 
-st.title("📊 Mapa 3D de Alta Visibilidad - EMECU")
+st.title("📊 Análisis Territorial EMECU (3D)")
 
 if df is not None:
+    # Preparar datos
     df['lat'] = df['Ciudad'].map(lambda x: coords_municipios.get(x, {}).get('lat'))
     df['lon'] = df['Ciudad'].map(lambda x: coords_municipios.get(x, {}).get('lon'))
     df = df.dropna(subset=['lat', 'lon'])
     df_counts = df.groupby(['lat', 'lon', 'Ciudad']).size().reset_index(name='cantidad')
 
-    # --- EL TRUCO PARA EL COLOR ---
-    # Definimos el mapa base como una constante de Deck.gl que NO usa Mapbox
-    COPIER_PLATE = {
-        "version": 8,
-        "sources": {
-            "osm": {
-                "type": "raster",
-                "tiles": ["https://a.tile.openstreetmap.org/{z}/{x}/{y}.png"],
-                "tileSize": 256,
-                "attribution": "&copy; OpenStreetMap contributors"
-            }
-        },
-        "layers": [
-            {
-                "id": "osm",
-                "type": "raster",
-                "source": "osm",
-                "minzoom": 0,
-                "maxzoom": 19
-            }
-        ]
-    }
+    # --- CREACIÓN DEL MAPA CON PLOTLY ---
+    # Usamos Scattermapbox pero con un estilo que resalte
+    fig = go.Figure()
 
-    view_state = pdk.ViewState(
-        latitude=7.7667, longitude=-72.2250, zoom=10, pitch=55, bearing=0
-    )
-
-    layer = pdk.Layer(
-        "ColumnLayer",
-        data=df_counts,
-        get_position='[lon, lat]',
-        get_elevation='cantidad',
-        elevation_scale=1000, # Barra bien alta para que se note
-        radius=400,
-        get_fill_color=[0, 102, 204, 230], # Azul Rey llamativo
-        pickable=True,
-        auto_highlight=True,
-    )
-
-    # Renderizado forzando el estilo manual
-    st.pydeck_chart(pdk.Deck(
-        map_style=COPIER_PLATE, # <--- Esto fuerza los colores de OpenStreetMap
-        initial_view_state=view_state,
-        layers=[layer],
-        tooltip={"text": "Ciudad: {Ciudad}\nHermanos: {cantidad}"}
+    # Añadimos los puntos como burbujas 3D (el tamaño depende de la cantidad)
+    fig.add_trace(go.Scattermapbox(
+        lat=df_counts['lat'],
+        lon=df_counts['lon'],
+        mode='markers',
+        marker=go.scattermapbox.Marker(
+            size=df_counts['cantidad'] * 20, # Tamaño de la burbuja
+            color='#0077b6',                # Azul llamativo
+            opacity=0.7
+        ),
+        text=df_counts['Ciudad'] + ": " + df_counts['cantidad'].astype(str) + " hermanos",
+        hoverinfo='text'
     ))
+
+    # Configuramos el diseño del mapa para que sea "OpenStreetMap" (GRATIS)
+    fig.update_layout(
+        mapbox_style="open-street-map", # <--- ESTO ES GRATIS Y TIENE COLORES
+        hovermode='closest',
+        margin={"r":0,"t":0,"l":0,"b":0},
+        mapbox=dict(
+            bearing=0,
+            center=go.layout.mapbox.Center(
+                lat=7.7667,
+                lon=-72.2250
+            ),
+            pitch=60, # Inclinación para el efecto visual
+            zoom=10
+        ),
+        height=700
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+    
+    st.info("Nota: Debido a restricciones de seguridad de las librerías de mapas, hemos migrado a un motor de visualización abierto. Los círculos representan la densidad de hermanos por ciudad.")
+
 else:
-    st.write("Cargando...")
+    st.error("No se pudieron cargar los datos.")
